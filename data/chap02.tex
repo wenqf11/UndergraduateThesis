@@ -53,8 +53,9 @@ Q(B, R) = \lVert B - VR \rVert_F ^2
 \begin{figure}[H]
   \centering
   \includegraphics[width=1.0\linewidth]{itq}
-  \caption{ITQ 旋转过程，图像来源\cite{YunchaoGong:2011:IQP:2191740.2191779}}
+  \caption{ITQ 旋转过程}
   \label{fig:itq}
+  \footnotesize 注：图像来源\cite{YunchaoGong:2011:IQP:2191740.2191779}
 \end{figure}
 这样，整个问题的目标函数就变成了$\min \lVert B - VR \rVert_F ^2$。这个公式中有两个未知量，编码后的矩阵 $B$ 和 旋转矩阵 $R$。所以，这个问题的求解要考虑采用交替迭代的方法。先对一个随机生成的矩阵进行 SVD 分解得到一个正交矩阵作为 $R$ 的初始值，此时 $R$ 已知，就可以用$ B= \mathrm{sgn}(VR)$ 来求解 $B$；当 $B$ 已知后，可以对 $B^TV$ 进行 SVD 分解求解 $R$。既然 $R$ 求出，又可以重新一次迭代，固定 $R$ 求 $B$，如此交替迭代就可以求解出该问题。
 \subsection{Cartesian K-Means}
