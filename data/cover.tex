@@ -57,27 +57,27 @@
 
 % 定义中英文摘要和关键字
 \begin{cabstract}
-  近似近邻查询是处理多媒体数据的一项基本而重要的技术，在计算机视觉、数据挖掘等前沿研究领域有着广泛的应用。随着数据指数式的增长，如何从大规模高维数据中进行尽
+  近似近邻查询是处理非结构化数据的一项基本而重要的技术，在模式识别、数据挖掘等前沿研究领域有着广泛的应用。随着数据指数式的增长，如何从大规模高维数据中进行尽
   可能快速、精确地查询成为备受关注的问题。
 
   本文中，我们通过对比研究了基于树结构的索引方法和基于哈希的索引方法，并介绍了其中具有代表性的几种方法。本文采用向量量化的哈希方法，在 Spark 平台上建立了一套近似近邻
-  查询系统，在保证高检索准确率的情况下加速查询效率。最终介绍了在三个数据集上进行的实验，验证系统的正确性和可用性。
+  查询系统，不仅可以降低存储代价，而且在保证高检索准确率的情况下加速查询效率。最终介绍了在三个数据集上进行的实验，验证系统的正确性和可用性。
 \end{cabstract}
 
 \ckeywords{近似近邻查询, Spark, 乘积量化, 索引}
 
 \begin{eabstract}
    Approximate nearest neighbor search (ANNS) is a basic and important technique
-   in processing multimedia data, which is widely used in frontier research fields,
-   such as Computer Vision and Data Mining. With with exponential growth of data, much
+   in processing unstructured data, which is widely used in frontier research fields,
+   such as Pattern Recognition and Data Mining. With exponential growth of data, much
    attention has been paid to the question that how to search in large-scale
    high-dimensional data as fast and accurately as we can.
 
    In this paper, we study tree-based indexing method and hash-based indexing
    method comparatively, and introduce several representative method of them. We build
    an ANNS system on Spark using hashing method based on vector quantization, which can
-   improve query efficiency with high accuracy of retrieval. Finally, we introduce
-   experiments that performed on three dataset to validate correctness and practicability
+   not only reduce storage costs but also improve query efficiency with high accuracy of retrieval. Finally, we introduce
+   experiments that are performed on three dataset to validate correctness and practicability
    of the system.
 \end{eabstract}
 

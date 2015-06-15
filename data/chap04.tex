@@ -4,143 +4,114 @@
 %%% TeX-master: t
 %%% End:
 
-\chapter{基于 Spark 的分布式近似近邻查询系统}
-\label{cha:ANNS_based_on_Spark}
-\section{乘积量化}
-\label{sec:product_quantization}
-与之前提到的 K-Means 的量化方法一样，乘积量化（Product Quantization）\cite{Herve_PQ}也是向量量化方法的一种。假设我们需要量化压缩 128 维的向量到 64 比特，采用 K-Means 的量化方法的话，需要有 $2^{64}$ 个聚类中心，这样不管是从 K-Means 聚类所需要的时间还是从存储聚类中心所占的空间来看，都是不可行的。
+\chapter{实验与分析}
+\label{cha:experiments_analysis}
+本章节主要介绍在 Spark 集群上进行近似近邻查询算法的实验，主要包括实验环境介绍、实验数据集介绍、实验结果展示以及实验分析。
 
-对于上面同样的问题，在乘积量化的算法中，我们首先将原始的数据空间划分为 $m$ 个不相交的子空间，也就是将 128 维的向量切成 $m$ 个长度为 $128/m$ 的子向量。在每个子空间里，分别对子空间中的子向量集合进行 K-Means 聚类，聚类中心数量为 $h$。这样我们就可以用 $1\cdots h$ 这些编号来对子向量进行编码，$m$ 个子向量的编码组合在一起就构成了原始向量的编码。这样，原始空间中一个 128 维的向量就可以压缩到一个 $m\log_2h$ 比特编码表示，从而大大节省了空间。
+下图是 Spark 集群系统的工作模式图。驱动程序（driver）会和集群的管理器（cluster manager）相连接，驱动其为集群其他节点分配资源。在分配完毕以后，驱动程序会将你的应用程序（Scala 中的 jar 包）发送到各个节点的线程池（executor）。之后驱动程序会调配任务给各个节点执行。
+\label{cha:experiments_analysis}
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.5\linewidth]{PQ_subspace}
-  \caption{PQ 算法中子空间的划分}
-  \label{fig:PQ_subspace}
+  \includegraphics[width=0.9\linewidth]{spark-yarn}
+  \caption{Spark 集群系统工作模式}
+  \label{fig:spark-yarn}
 \end{figure}
-更为一般来说，我们可以得到乘积量化方法的目标函数如下：
-\begin{equation}
-\mathit{l}_\mathrm{PQ} = \sum_{i=1}^n\min\Bigg\lVert \mathbf{x}_i - \begin{bmatrix}C^1\mathbf{b}^1_i\\\vdots\\C^m\mathbf{b}^m_i\end{bmatrix} \Bigg\rVert _2^2
-\end{equation}
-
-其中 $\mathbf{x}_i$ 的维度是 $p$，$\mathbf{b}^j_i \in \{0,1\}^h$且$\lVert\mathbf{b}^j_i\rVert=1$，$j \in \{1,\cdots,m\}$。在上面式子中，$C^j(j\in \{1,\cdots,m\})$ 就是我们需要求解的矩阵。在编码过程中，整体的码本（codebook）$C$ 就可以用笛卡尔积的形式表示，$C = C^1 \times \ldots \times C^m$。码本的大小就是所有子空间中聚类中心数量的乘积，根据前面的假设，共有 $m$ 个子空间，每个子空间聚类个数为 $h$，所以码本数量就是 $k = h^m$。求解过程其实并不复杂，正如前文提到，在每个子空间中做 K-Means 聚类就可以求解出码本，这样我们就可以利用码本对每个子空间中的子向量进行编码，从而对原始向量进行编码表示。整个算法的复杂度就和向量维度 $p$、子空间数量 $m$、子空间聚类中心数量 $h$ 有关，存储码本所需要的空间复杂度为 $O(mhp)$。
-\begin{table}[htbp]
-  \centering
-  \caption{乘积量化与 K-Means 量化的空间占用对比}
-  \label{tab:kmean_pq}
-  \begin{minipage}[t]{0.61\textwidth}
-    \begin{tabular}{|c|c|c|c|}
-      \hline
-                    & 聚类中心 & 编码长度& 空间占用\\
-      \hline
-      K-Means 量化  &  $k$ &   $\log k$&   $O(kp)$\\
-      乘积量化      &   $h^m$ &   $m\log h$ &  $O(mhp)$\\
-      \hline
-    \end{tabular}\\[2pt]
-    \footnotesize 注：$h^m = k$
-  \end{minipage}
-\end{table}
-
-从表 \ref{tab:kmean_pq} 是乘积量化算法和 K-Means 量化算法的空间占用对可知，当 $m = 1$ 时，乘积量化就退化成普通的 K-Means 聚类量化了。此外， $h$ 取值越大，不仅计算时间复杂度越大，而且空间复杂度也越大，进而也会使得在查询时的时间复杂度变大。因此，选择一个合适的 $m$ 和 $h$ 是非常重要的。论文\cite{Herve_PQ}中指出，$ m = 8 $ 和 $h = 256$ 是比较合适的选择。
-\section{基于乘积量化的近似近邻查询}
-刚刚我们已经介绍了乘积量化的编码压缩方法，那么如何将这一方法运用在近似近邻查询当中呢？采用乘积量化的方法进行近似近邻查询也是一个机器学习类方法，遵循学习类算法的主体流程。整个近似近邻查询算法的主要流程如下：
+\section{实验环境}
+本次实验中关于 Spark 部分的实验都是在由 4 台机器构成的 Spark on YARN 集群系统上完成的。其中，每台机器配置均相同，配置如下：
 \begin{itemize}
-\item 利用部分数据集，依照乘积量化的方法训练出码本。
-\item 在原始的数据集上，采用训练出的码本对其进行编码压缩。
-\item 对于任意的查询向量，度量它与编码压缩后的码字之间的距离，从而得到近邻集合。
+\item 操作系统：Red Hat Enterprise Linux Server release 7.0
+\item 处理器信息：Intel(R) Xeon(R) CPU E5-2609 0 @ 2.40GHz
+\item 逻辑核数：8 核
+\item 内存大小： 60G
 \end{itemize}
-\subsection{训练码本}
-首先是训练集的选择，训练集的选取对整个算法是非常关键的，最终近邻查询的准确率一定程度上取决于训练集的好坏。在选择训练集上有两点需要注意，一是训练集的规模大小，二是训练集的代表性。训练集的规模既不宜过大也不能太小，过大会带来过拟合问题，过小则会欠拟合。通常，训练集的规模大小约为原始数据集的 $1/10$ 比较合适。此外，训练集还应该尽可能得有代表性，尽可能广泛地分布于整个数据空间，这样才能使得训练出来的码本才能更好的量化原始数据空间，更准确地对原始数据集进行编码。
 
-在具体训练码本的过程中，如章节 \ref{sec:product_quantization} 中所介绍的一样，首先将训练集中的数据划分到 $m$ 个子空间。在每个子空间中，对所有的子向量数据在进行 K-Means 聚类，可以得到 $h$ 个聚类中心，也就得到每个子空间的码本。算法的伪代码如算法 \ref{algo:train} 所示。
-\begin{algorithm}
-    \caption{训练码本}
-    \label{algo:train}
-    \begin{algorithmic}[1] %每行显示行号
-        \Require 训练集 $C$ 矩阵，子空间聚类数量 $subCenters$，聚类算法最大迭代次数 $maxIterations$
-        \Ensure 码本模型数组 $model$
-        \Function {PQ\_TRAIN}{$C, subCenters, maxIterations$}
-            \State uniformly split $C$ by rows into $m$ part
-            \For{$i = 1 \to m $}
-                \State $model[i] \gets KMEANS\_TRAIN(C[i], subCenters, maxIterations)$
-            \EndFor
-            \State \Return{$model$}
-        \EndFunction
-    \end{algorithmic}
-\end{algorithm}
-\subsection{编码压缩}
-如算法 \ref{algo:assgin} 所示，训练得出每个子空间中的码本之后，将其应用到原始数据集上进行编码压缩。首先，同样也是将原始数据集划分到 $m$ 个子空间。然后在每个子空间中，对每一个数据的子向量，分别用训练出来的码本进行编码，也就是用训练好的 K-Means 模型进行预测，可以知道每个子向量隶属于哪个聚类中心，即子向量应该用哪个码字来编码了。这样，整个数据集中的数据都可以用编码来进行表示。完成编码压缩之后，编码后的数据集相比于原始数据集，存储空间成倍的缩小了。
-\begin{algorithm}
-    \caption{编码压缩}
-    \label{algo:assgin}
-    \begin{algorithmic}[1] %每行显示行号
-        \Require 码本模型数组 $model$，原始数据集 $X$ 矩阵
-        \Ensure 编码后的矩阵 $B$
-        \Function {PQ\_ASSIGN}{$model, X$}
-            \State uniformly split $X$ by rows into $m$ part
-            \For{$i = 1 \to m $}
-                \For{$j = 1 \to n $}
-                    \State $B[i][j] \gets model[i].predict(X[i][j])$
-                \EndFor
-            \EndFor
-            \State \Return{$B$}
-        \EndFunction
-    \end{algorithmic}
-\end{algorithm}
-\subsection{近邻查询}
-在近似近邻查询的过程中，对于任意一个查询向量 $q$，我们首先计算出 $q$ 在子空间中对应子向量和子空间中聚类中心之间的距离，将计算出的距离用一个查找表存储好。现在我们计算查询向量 $q$ 和编码数据集上的每个数据之间的距离。在每个子空间中，因为我们已经计算出了子向量与聚类中心之间距离，利用查找表，我们就可以迅速得出每个数据在子空间中与向量对应距离。最终将不同子空间中同一向量距离加和。这样就得到了最终的每个向量和查询向量 $q$ 之间的距离。利用一个优先队列，我们就可以快速获取出前 $k$ 个近邻集合。具体算法流程可以参考算法 \ref{algo:ANNS}
-\begin{algorithm}
-    \caption{近邻近邻查询}
-    \label{algo:ANNS}
-    \begin{algorithmic}[1] %每行显示行号
-        \Require 码本模型数组 $model$，编码数据集 $B$ 矩阵，查询数据 $q$
-        \Ensure 近邻集合 $result$ 数组
-        \Function {PQ\_SEARCH}{$model, B, q$}
-            \For{$i = 1 \to m $}
-                \For{$j = 1 \to model[i].subcenters $}
-                    \State $d[i][j] \gets COMPUTE\_DIST(model[i].center[j], q) $
-                \EndFor
-            \EndFor
+关于 MATLAB 部分的实验是在一台单机上完成，配置如下：
+\begin{itemize}
+\item 操作系统：Windows 8
+\item 处理器信息：Intel(R) Core(TM) i3 CPU M 380 @ 2.53GHz
+\item 逻辑核数：4 核
+\item 内存大小： 6G
+\end{itemize}
+\section{实验数据集}
+实验过程中主要使用到了三个数据集，分别是 SIFT1M\footnote{http://corpus-texmex.irisa.fr/\label{fn:repeat}}、GIST1M\footnotemark[1]、CIFAR-10\footnote{http://www.cs.toronto.edu/~kriz/cifar.html}。 实验主要对比上一章节中介绍的方法在 Spark 集群系统上与 MATLAB 单机系统上的近似近邻查询的召回率以及相应时间消耗，此外也对比在不同的参数下， Spark 集群系统上的运行结果。
+\subsection{SIFT1M}
+SIFT1M 是近年来被广泛应用于近似近邻查询方法准确率和召回率的衡量。这个数据集中的数据都是 128 维的 SIFT 特征向量，包含三部分：待索引的原始数据集（base）、训练数据集（learn）、查询数据集（query）。其中待索引的原始数据集合有 $10^6$ 个向量，训练数据集有 $10^5$ 个，查询数据集共有 $10^4$ 个。
+\subsection{GIST1M}
+GIST1M 这个数据集中的数据都是 960 维的 GIST 特征向量，包含三部分：待索引的原始数据集（base）、训练数据集（learn）、查询数据集（query）。其中待索引的原始数据集合有 $10^6$ 个向量，训练数据集有 $5\times10^5$ 个，查询数据集共有 $10^3$ 个。
+\subsection{CIFAR-10}
+CIFAR-10 数据集被广泛用于在计算机视觉领域做目标识别、图像分类等任务的。它是从 80 million tiny images\footnote{http://groups.csail.mit.edu/vision/TinyImages/} 数据集中挑选出的一个带标签的子集，由 60000 张 $32\times 32$ 的彩色图像组成。它们被分成 10 类，每个类别有 6000 张图片。10 个类别分别是airplane、automobile、bird、cat、deer、dog、frog、horse、ship、truck。
 
-            \For{$i = 1 \to n $}
-                \State $dist[i] \gets 0$
-                \For{$j = 1 \to m $}
-                    \State $dist[i] \gets dist[i] + d[i][B[j][i]]$
-                \EndFor
-            \EndFor
-            \State $result = GET\_TOPK(dist)$
-            \State \Return{$result$}
-        \EndFunction
-    \end{algorithmic}
-\end{algorithm}
-\section{基于 Spark 的分布式近似近邻查询}
-\subsection{算法流程设计}
-算法的总体流程设计图如图 \ref{fig:algorithm-desgin} 所示，首先在训练数据集上进行码本的训练，得到码本模型后将其运用在原始数据集上进行编码压缩，从而可以将原始数据进行编码表示。最终，对于任意一个查询向量，通过近似近邻查询算法在编码数据集上找出近邻候选集合。
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.8\linewidth]{algorithm-desgin}
-  \caption{算法总体设计图}
-  \label{fig:algorithm-desgin}
-\end{figure}
-\subsection{数据结构}
-在 Spark 上，分布式程序的编写必须依赖分布式的数据结构 RDD， RDD 分布式地存储在不同节点上，这样才能保证程序分布式地执行 。因此如何合理设计程序的 RDD 非常重要。
-
-在 Spark MLlib 库中提供了一种自带的数据结构 BlockMatrix。BlockMatrix 是用 RDD 构建的分布式矩阵，其中 RDD 的类型是 （（Int, Int）, Matrix）。（Int，Int）是 Matrix 的下标索引，那么 BlockMatrix 的每一个元素都是一个带下标索引矩阵。BlockMatrix 还提供了一些自带的函数可供调用，如 add、multiply。
+在本次实验中，我们对每张图片提取出 320 维的 GIST 特征表示，这样我们就得到了 60000 个 320 维的 GIST 向量。我们从中选取 1000 个作为查询数据，剩余的作为训练数据和待检索数据集。在编码数据集上进行近似近邻查询出前 500 张图片，根据原有的类别标签来衡量查询的准确率。
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.6\linewidth]{blockmatrix}
-  \caption{BlockMatrix 划分方式}
-  \label{fig:blockmatrix}
+  \includegraphics[width=0.7\linewidth]{cifar-10}
+  \caption{CIFAR-10 数据集中图片示例}
+  \label{fig:cifar-10}
 \end{figure}
+\section{实验结果与分析}
+\subsection{SIFT1M 对比实验}
+本实验室在 SIFT1M 数据上进行，通过比较 Spark 集群上的乘积量化的近似近邻查询方法与同样方法在 MATLAB 单机上的实验的召回率和时间消耗的对比。
 
-图 \ref{fig:blockmatrix} 是一个示例的 BlockMatrix 的划分方式，图中的$ 8\times 10$ 的矩阵被划分成 4 个子空间，每个子空间上有 10 个子向量。那么我们需要一个 $4\times 10$ 的 BlockMatrix 来存储，红色的框中的向量就对应了一个 matrix，相应 matrix 的下标索引标示在图中了。在上一章节的算法中已经说明，我们需要划分 $m$ 个子空间，每个子空间中有 $n$ 个子向量，因此我们用 $m\times n$ 的 BlockMatrix 数据结构来表示数据是比较合适的。具体而言，我们算法中的训练集数据、原始数据、编码后的数据等都是需要用 BlockMatrix 这个数据结构来存储表示的。
-\subsection{系统优化}
-集群系统上的分布式程序一般来说都会需要考虑通信的问题，即使 Spark 中 RDD 已经进行了很好的封装，让用户可以专注于程序的设计，不用直接进行底层的数据数理（通信、容错）。开发者只需要通过操作上层的一些 API 就可以了，但是数据通信的问题在 Spark 中还是一个不能忽视的问题，只有了解底层的通信机制利用 API 编写出高效的程序。一般来说，我们优化的原则是尽可能地减少数据的通信，特别是通信量比较大的。
-
-数据都是分布式存储，如果某个操作与两个分布式数据同时关联，比如两个大小相同分布式矩阵对应元素相加，那么必须要两个分布式数据中分块的一一对齐。具体到本算法中，根据上一小节所提的数据结构的划分方式，假设存储训练数据集的矩阵用 $C$ 表示，存储原始数据集 BlockMatrix 用 $X$ 表示，存储编码后数据集的矩阵用 $B$ 表示，这些都是分布式地存储在集群系统当中的。由于子空间的划分，我们会在每个子空间中生成自己的码本模型。如果码本模型是分布式存储，那么在编码阶段，我们需要将子空间对齐。 Spark RDD 的 join 操作确实提供了按照键值进行对齐操作，但这一过程可能就会产生一些数据分区重组操作。这种分区重组的操作需要进行磁盘读写和网络，因此我们应该尽量避免 分区重组操作。我们考虑采用 RDD 的广播操作，一次性将只读的数据广播到集群上的所有节点，每个节点上的任务在执行过程中可以直接读取，而不需要考虑对齐问题。在我们算法中，我们选择将计算出的码本模型广播到所有节点以便编码阶段使用。
-
-第二点优化就是利用之前提到的 Spark RDD 的持久化机制。Spark RDD 的持久化可以将 RDD 数据缓存到内存或者磁盘上，以后用到 RDD 的时候不要再次重复计算，从而节省时间效率，这一机制特别适合迭代计算中使用。在我们的算法中，我们选择将一些反复用到 RDD 缓存在内存当中。
-\section{本章小结}
-本章中首先介绍了乘积量化的哈希方法，通过乘积量化的方法将原始数据集进行编码压缩。之后，我们还介绍了乘积量化哈希方法在近似近邻查询中应用。通过训练码本、编码压缩、近似近邻查询三个过程，我们就可以实现一套完整的近似近邻查询算法。此外，本章节还介绍了在 Spark 计算框架上的这一算法的实现，主要介绍了算法总体流程设计、数据结构的选择以及系统的优化方法。
-
-
+在 Spark 集群系统上的程序参数设置，我们采用 yarn-client 模式在集群上运行程序，设置 executor 的数量为 40，每一个 executor 的内存大小限制为 5G。在对 SIFT1M 数据集近似近邻查询实验中，我们设置子空间切分数量 $m$ 为 8，子空间中的聚类中心数量为 $h$ 为 256，因此总的聚类中心的数量就是 $2^{64}$，编码字节的大小就是 64 比特。$h$ 取 256 是比较合适的，恰当的子空间聚类中心数量一方面可以使得查找表的大小不会过大，另一方面保证训练和编码的时间也不会太长。在这次实验中，我们采用 recall@$R$ 作为查询效果好坏的衡量标准，其中 $R$ 是检出数据集的大小。SIFT1M 数据中有 $10^4$ 个查询向量，对于一个查询向量，通过整个近似近邻查询计算，我们在原始向量中找到前 100 个近邻向量，并分别取 $R$ 为 1、2、5、10、20、50、100，计算前 $R$ 个向量中出现最近邻向量的次数 $s$，那么衡量标准就可以由公式 recall@$R = s/10^4$ 计算得出。
+\begin{table}[htbp]
+\noindent\begin{minipage}{0.5\textwidth}
+\centering
+\caption{Spark 与 MATLAB 上召回率对比}
+\label{tab:recall_on_spark_matlab}
+\begin{tabular}{ccc}
+\toprule[1.5pt]
+    & Spark & MATLAB\\
+  \hline
+  recall@1  &  0.23   & 0.29\\
+  recall@2  &  0.33 &   0.40\\
+  recall@5  &  0.48 &   0.53\\
+  recall@10  & 0.60 &   0.62\\
+  recall@20  &  0.72&  0.73\\
+  recall@50  &  0.85 &  0.81\\
+  recall@100  & 0.92 &  0.88\\
+\bottomrule[1.5pt]
+    \end{tabular}
+\end{minipage}
+\begin{minipage}{0.5\textwidth}
+\centering
+\caption{Spark 与 MATLAB 上时间对比}
+\label{tab:time_on_spark_matlab}
+\begin{tabular}{ccc}
+\toprule[1.5pt]
+    & Spark & MATLAB \\
+\hline
+训练时间（s） & 1193.04 & 1574.09  \\
+编码时间（s） & 12.42 & 49.93 \\
+单次查询时间（s）& 2.89 & 181.71 \\
+\bottomrule[1.5pt]
+\end{tabular}
+\end{minipage}
+\end{table}
+表 \ref{tab:recall_on_spark_matlab} 和表 \ref{tab:time_on_spark_matlab} 分别显示的是在 Spark 上与 MATLAB 中的召回率对比以及所用时间对比。仅从表 \ref{tab:recall_on_spark_matlab} 来看，Spark 集群系统上程序的召回率与 MATLAB 单机版本的相差不大。在保证召回率差不多的情况下，我们再看表  \ref{tab:time_on_spark_matlab}，从表中我们可以看出在训练阶段的时间消耗上，Spark 比 MATLAB 耗时要少，但是并没有成倍数减少。在编码阶段时间消耗， Spark 集群上用时仅为 MATLAB 的 $1/4$ 左右。到了查询阶段，单次耗时 MATLAB 是 Spark 集群系统上单次耗时的 $70$ 余倍。
+\subsection{GIST1M 实验}
+对 GIST1M 数据集的实验都在 Spark 集群系统上完成， Spark 集群系统的配置上面的实验相同，在 yarn-client 模式执行程序， executor 的数量为 40，executor 的内存大小限制为 5G。 在本次实验中，我们分别采用 32 比特、64 比特、96 比特、128比特、256 比特这些不同编码长度进行实验，观察实验中 recall@$R$ 的变化，$R$ 是检出数据集大小。
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\linewidth]{gist}
+  \caption{GIST1M 上不同编码长度下的召回率对比}
+  \label{fig:gist}
+\end{figure}
+从上图 \ref{fig:gist} 中可以看出，在同等检出数量下，编码长度越长，召回率越高。由此，也可以证明算法的正确性。
+\subsection{CIFAR-10 实验}
+在 CIFAR-10 数据集上的实验中，Spark 集群系统的配置以及程序的参数设置和 GIST1M 中完全相同。分别对不同长度的编码进行对比实验，根据数据集原有的类别标签，我们采用准确率 precision 来衡量检出效果，图中 $R$ 是检出数据的数量。
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\linewidth]{cifar-result}
+  \caption{CIFAR-10 上不同编码长度下的查准率对比}
+  \label{fig:cifar-result}
+\end{figure}
+从图 \ref{fig:cifar-result} 中，我们可以看到在同样的压缩编码下，准确率随着检出数量增大而不断降低。在相同的检出数量条件下，编码长度越长，检出的准确率越高。下图 \ref{fig:horse} 是实验中对于一个查询图片检索出前 25 个相似图片的示例。
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.5\linewidth]{horse}
+  \caption{CIFAR-10 数据集上图像查询实例}
+  \label{fig:horse}
+\end{figure}
+\subsection{本章小结}
+本章中主要介绍了在 SIFT1M、GIST1M、CIFAR-10 三个数据集上分别进行实验。在 SIFT1M 数据集上，通过对比 Spark 集群系统上 和 MATLAB 上的召回率以及查询时间，可以看出 我们的近似近邻查询系统的正确性以及查询效率的加速情况。在 GIST1M 上的实验说明，我们系统有比较好的扩展性，同时结果也表明了查询系统的正确性。在 CIFAR-10 数据集上的实验表明我们的系统能够应用于大规模图像检索当中。
